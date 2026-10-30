@@ -62,7 +62,7 @@ jobs:
           if [ "${{ inputs.early_hang }}" = "true" ]; then
             export EXTRA_CFLAGS="-DEARLY_BEACON"
           fi
-          MKBOOTIMG="python3 $PWD/out/mkbootimg/mkbootimg.py" bash shim/build.sh out/payload.bin
+          MKBOOTIMG="python3 $PWD/out/mkbootimg/mkbootimg.py" bash shim/build.sh ../out/payload.bin
           ls -la shim/out/
           if [ "${{ inputs.device }}" != "sweet" ]; then
             python3 out/avb/avbtool.py add_hash_footer \
