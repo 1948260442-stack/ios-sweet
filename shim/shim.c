@@ -373,8 +373,11 @@ static uint32_t to_us(uint64_t ticks)
 
 void shim_main(uint64_t dtb)
 {
-	/* MINIMAL: just paint the screen red and spin. No UFS, no loader, no MMU. */
-	con_clear(0xff0000U);	/* pure red */
-	for (;;)
-		__asm__ volatile("wfe");
+	/* MINIMAL: flash red/blue so user can see if shim runs at all. */
+	for (;;) {
+		con_clear(0xff0000U);	/* red */
+		delay_ms(2000);
+		con_clear(0x0000ffU);	/* blue */
+		delay_ms(2000);
+	}
 }
