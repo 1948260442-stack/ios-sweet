@@ -19,6 +19,21 @@ _head:
 	.text
 	.globl _start
 _start:
+#ifdef EARLY_BEACON
+	/* Report "the shim ran" through IMEM's restart_reason, then reset:
+	 * ABL carries that value into the next boot's androidboot.bootreason,
+	 * which is readable from Android without root. */
+	mov	x0, #0x6aa65c
+	movk	x0, #0x146, lsl #16		/* 0x146aa65c: imem restart_reason */
+	mov	w1, #0x4831
+	movk	w1, #0x4453, lsl #16		/* 'DSH1' */
+	str	w1, [x0]
+	mov	x0, #0x0009
+	movk	x0, #0x8400, lsl #16		/* PSCI SYSTEM_RESET */
+	smc	#0
+1:	wfe
+	b	1b
+#endif
 #ifdef EARLY_HANG_ASM
 	/* Beacon as the literal first instruction: if the phone hangs instead of
 	 * dropping back to fastboot, ABL did jump to us. */

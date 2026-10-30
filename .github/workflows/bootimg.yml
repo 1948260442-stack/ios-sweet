@@ -60,7 +60,7 @@ jobs:
             export HEADER_VERSION=1 DTB_ARG= OS_VERSION=11.0.0 OS_PATCH_LEVEL=2021-11 WRAP_UNCOMPRESSED_IMG=1
           fi
           if [ "${{ inputs.early_hang }}" = "true" ]; then
-            export EXTRA_CFLAGS="-DEARLY_HANG -DEARLY_HANG_ASM"
+            export EXTRA_CFLAGS="-DEARLY_BEACON"
           fi
           MKBOOTIMG="python3 $PWD/out/mkbootimg/mkbootimg.py" bash shim/build.sh "$PWD/out/payload.bin"
           ls -la shim/out/
