@@ -373,11 +373,45 @@ static uint32_t to_us(uint64_t ticks)
 
 void shim_main(uint64_t dtb)
 {
-	/* MINIMAL: flash red/blue so user can see if shim runs at all. */
-	for (;;) {
-		con_clear(0xff0000U);	/* red */
-		delay_ms(2000);
-		con_clear(0x0000ffU);	/* blue */
-		delay_ms(2000);
-	}
+	/* Cepheus bring-up: MMU/D-cache off. Read system regs and issue SMCs
+	 * directly (the most reliable path), paint results, then hold. */
+	stage = "console";
+	con_clear(BLUE);
+	con_str("SHIM", "cepheus shim running");
+	con_skip();
+
+	/* CPU identity */
+	stage = "cpu";
+	con_hex("MPIDR", rsr("mpidr_el1"));
+	con_hex("MIDR", rsr("midr_el1"));
+	con_skip();
+
+	/* CPU/MMU feature registers that decide the XNU port.
+	 * PARange = mmfr0[3:0]; 16K granule support = mmfr0[23:20]. */
+	stage = "feat";
+	con_hex("MMFR0", rsr("id_aa64mmfr0_el1"));
+	con_hex2("PARANGE", "v=", rsr("id_aa64mmfr0_el1") & 0xf,
+		 "tg16=", (rsr("id_aa64mmfr0_el1") >> 20) & 0xf);
+	con_hex("PFR0", rsr("id_aa64pfr0_el1"));
+	con_hex("ISAR0", rsr("id_aa64isar0_el1"));
+	con_hex("ISAR1", rsr("id_aa64isar1_el1"));
+	con_skip();
+
+	/* DTB pointer ABL handed us */
+	stage = "dtb";
+	con_hex("DTB", dtb);
+	con_hex2("DTBMAG", "v=", dtb ? __builtin_bswap32(rd32(dtb)) : 0,
+		 "=", 0);
+	con_skip();
+
+	/* PSCI / SMCCC */
+	stage = "psci";
+	con_hex2("PSCI", "ver=", smc(PSCI_VERSION, 0, 0, 0),
+		 "smccc=", smc(SMCCC_VERSION, 0, 0, 0));
+	con_skip();
+
+	stage = "hold";
+	con_str("HOLD", "results stay on screen");
+	for (;;)
+		__asm__ volatile("wfe");
 }
