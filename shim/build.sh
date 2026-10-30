@@ -33,7 +33,7 @@ truncate -s "$size" out/Image
 # (it just drops back to fastboot, no error). Wrapping moves our own ARM64
 # header to 0x14, so its magic lands at 0x4c exactly like theirs.
 if [ "${WRAP_UNCOMPRESSED_IMG:-0}" = "1" ]; then
-	python3 -c "import struct; d=open('out/Image','rb').read(); open('out/Image.w','wb').write(b'UNCOMPRESSED_IMG\x00' + struct.pack('<I', int('${IMG_HDR_FIELD:-0}', 0)) + d)"
+	python3 -c "import struct; d=open('out/Image','rb').read(); open('out/Image.w','wb').write(b'UNCOMPRESSED_IMG' + struct.pack('<I', int('${IMG_HDR_FIELD:-0}', 0)) + d)"
 	mv out/Image.w out/Image
 	echo "wrapped Image: $(wc -c < out/Image) bytes"
 fi
