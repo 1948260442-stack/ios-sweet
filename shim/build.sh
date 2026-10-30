@@ -52,7 +52,8 @@ fi
 if [ -n "${1:-}" ]; then
 	cp "$1" out/ramdisk.bin
 else
-	(cd out && rm -rf rd && mkdir rd && cd rd && find . | cpio -o -H newc --quiet | gzip -9 > ../ramdisk.bin)
+	# stock cepheus has ramdisk_size=0; use an empty file to match exactly.
+	: > out/ramdisk.bin
 fi
 # Boot image packing. Devices differ here:
 #   sweet   -> header v2 with the stock DTB embedded in the boot image
