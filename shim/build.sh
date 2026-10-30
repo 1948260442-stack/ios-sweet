@@ -26,6 +26,17 @@ size=$($NM out/shim.elf | awk '$3=="_end"{print $1}')
 # read them as octal. Force hex.
 size=$((0x$size))
 truncate -s "$size" out/Image
+
+# Qualcomm/MIUI kernels of this generation are wrapped in a 0x14-byte container
+# starting with the ASCII magic "UNCOMPRESSED_IMG". The stock and TWRP kernels
+# both carry it; cepheus' ABL silently refuses to boot an unwrapped ARM64 Image
+# (it just drops back to fastboot, no error). Wrapping moves our own ARM64
+# header to 0x14, so its magic lands at 0x4c exactly like theirs.
+if [ "${WRAP_UNCOMPRESSED_IMG:-0}" = "1" ]; then
+	python3 -c "import struct; d=open('out/Image','rb').read(); open('out/Image.w','wb').write(b'UNCOMPRESSED_IMG\x00' + struct.pack('<I', int('${IMG_HDR_FIELD:-0}', 0)) + d)"
+	mv out/Image.w out/Image
+	echo "wrapped Image: $(wc -c < out/Image) bytes"
+fi
 # Ramdisk: an xnu payload (tools/mkpayload.py) if given as $1, else an empty
 # newc cpio (ABL dislikes a zero-size ramdisk on some builds) -> diagnostics.
 if [ -n "${1:-}" ]; then
