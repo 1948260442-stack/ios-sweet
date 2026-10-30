@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build the shim and wrap it in a boot.img v2 that mirrors the stock PixelOS header.
+# Build the shim and wrap it in a boot.img that mirrors the stock header.
 set -euo pipefail
 cd "$(dirname "$0")"
 CC=${CC:-aarch64-linux-gnu-gcc}
@@ -20,49 +20,33 @@ $CC $CFLAGS -static -T shim.ld -Wl,--build-id=none -Wl,--no-warn-rwx-segments -W
 	out/start.o out/shim.o out/console.o out/mmu.o out/fdt.o out/loader.o out/ufs.o -o out/shim.elf
 $OBJCOPY -O binary out/shim.elf out/Image
 # ABL copies the file; pad to image_size so .bss/stacks exist as zeroed bytes.
-# (bash arithmetic understands 0x.., so this works with mawk as well as gawk)
-size=$($NM out/shim.elf | awk '$3=="_end"{print $1}')
 # nm prints 16 hex digits with leading zeros; without the 0x prefix bash would
-# read them as octal. Force hex.
+# read them as octal.
+size=$($NM out/shim.elf | awk '$3=="_end"{print $1}')
 size=$((0x$size))
 truncate -s "$size" out/Image
 
-# Qualcomm/MIUI kernels of this generation are wrapped in a 0x14-byte container
-# starting with the ASCII magic "UNCOMPRESSED_IMG". The stock and TWRP kernels
-# both carry it; cepheus' ABL silently refuses to boot an unwrapped ARM64 Image
-# (it just drops back to fastboot, no error). Wrapping moves our own ARM64
-# header to 0x14, so its magic lands at 0x4c exactly like theirs.
+# Qualcomm/MIUI kernels of this generation are wrapped in a container:
+#   0x00  "UNCOMPRESSED_IMG"  16 bytes, no NUL
+#   0x10  u32 dtb_off         offset of the appended DTB, relative to 0x14
+#   0x14  ARM64 Image
+#   ..    DTB                 at 0x14 + dtb_off
+# Both the stock and the TWRP kernel blobs carry this wrapper, and their dtb_off
+# points exactly at an FDT magic. cepheus' ABL reads that DTB to find the board
+# and silently drops back to fastboot when it is missing.
 if [ "${WRAP_UNCOMPRESSED_IMG:-0}" = "1" ]; then
-	# 0x00 "UNCOMPRESSED_IMG" (16B, no NUL) | 0x10 u32 dtb_off | 0x14 ARM64 Image | DTB
-	# dtb_off is relative to 0x14. Verified against the stock and TWRP blobs.
 	python3 -c "
 import struct
-img = open('out/Image','rb').read()
-dtb = open('../dtb/boot_unpacked/dtb','rb').read()
+img = open('out/Image', 'rb').read()
+dtb = open('../dtb/boot_unpacked/dtb', 'rb').read()
 img += b'\x00' * ((-len(img)) % 4096)
 blob = b'UNCOMPRESSED_IMG' + struct.pack('<I', len(img)) + img + dtb
-open('out/Image.w','wb').write(blob)
+open('out/Image.w', 'wb').write(blob)
 print('wrapped: image=%d dtb=%d dtb_off=%#x total=%d' % (len(img), len(dtb), len(img), len(blob)))
 "
 	mv out/Image.w out/Image
-fied against both the stock and the TWRP kernel blob):
-	#   0x00  "UNCOMPRESSED_IMG"       16 bytes, no NUL
-	#   0x10  u32 dtb_off              offset of the appended DTB, relative to 0x14
-	#   0x14  ARM64 Image
-	#   ..    DTB                      at 0x14 + dtb_off
-	# ABL reads the DTB to find the board; a container without one is refused.
-	python3 - <<'PY'
-	import struct
-	img = open('out/Image', 'rb').read()
-	dtb = open('../dtb/boot_unpacked/dtb', 'rb').read()
-	img += b'\x00' * ((-len(img)) % 4096)
-	blob = b'UNCOMPRESSED_IMG' + struct.pack('<I', len(img)) + img + dtb
-	open('out/Image.w', 'wb').write(blob)
-	print('wrapped: image=%d dtb=%d dtb_off=%#x total=%d'
-	      % (len(img), len(dtb), len(img), len(blob)))
-	PY
-	mv out/Image.w out/Image
 fi
+
 # Ramdisk: an xnu payload (tools/mkpayload.py) if given as $1, else an empty
 # newc cpio (ABL dislikes a zero-size ramdisk on some builds) -> diagnostics.
 if [ -n "${1:-}" ]; then
@@ -72,8 +56,8 @@ else
 fi
 # Boot image packing. Devices differ here:
 #   sweet   -> header v2 with the stock DTB embedded in the boot image
-#   cepheus -> header v1, no DTB (ABL supplies the board tree from dtbo.img;
-#              its stock boot.img and TWRP are both v1 with dtb_size 0)
+#   cepheus -> header v1, no DTB in the boot image (ABL supplies the board tree
+#              from dtbo.img; its stock boot.img and TWRP are both v1)
 HEADER_VERSION=${HEADER_VERSION:-2}
 DTB_ARG=${DTB_ARG---dtb ../dtb/boot_unpacked/dtb}
 $MKBOOTIMG --header_version "$HEADER_VERSION" --kernel out/Image --ramdisk out/ramdisk.bin \
