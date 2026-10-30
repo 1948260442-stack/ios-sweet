@@ -7,7 +7,7 @@ OBJCOPY=${OBJCOPY:-aarch64-linux-gnu-objcopy}
 READELF=${READELF:-aarch64-linux-gnu-readelf}
 NM=${NM:-aarch64-linux-gnu-nm}
 MKBOOTIMG=${MKBOOTIMG:-mkbootimg}
-CFLAGS="-O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra"
+CFLAGS="-O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra ${EXTRA_CFLAGS:-}"
 mkdir -p out
 for f in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c; do
 	$CC $CFLAGS -c $f -o out/${f%.*}.o

@@ -374,6 +374,13 @@ void shim_main(uint64_t dtb)
 {
 	struct mmu_info mi;
 
+#ifdef EARLY_HANG
+	/* Bring-up beacon: if ABL actually jumped to us, the device disappears
+	 * from fastboot until it is power-cycled. No console init, no MMU. */
+	for (;;)
+		__asm__ volatile("wfi");
+#endif
+
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
 	stage = "loader";
 	con_clear(RED);
