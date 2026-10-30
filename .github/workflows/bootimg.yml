@@ -31,12 +31,17 @@ jobs:
           ls -la out/kernel
           file out/kernel/kernel.development.* || true
 
-      - name: Cross toolchain + mkbootimg
+      - name: Cross toolchain + mkbootimg + avbtool
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu cpio
           git clone --depth 1 https://android.googlesource.com/platform/system/tools/mkbootimg out/mkbootimg
           python3 out/mkbootimg/mkbootimg.py --help | head -5
+          # cepheus' ABL demands a boot image with an AVB footer (stock and TWRP
+          # both carry AVBf/AVB0). On an unlocked device the key is not verified
+          # but the structure must be present, so sign with AOSP's test key.
+          git clone --depth 1 https://android.googlesource.com/platform/external/avb out/avb
+          ls out/avb/test/data/testkey_rsa2048.pem
 
       - name: Build ADT + payload
         run: |
@@ -59,6 +64,15 @@ jobs:
           fi
           MKBOOTIMG="python3 $PWD/out/mkbootimg/mkbootimg.py" bash shim/build.sh "$PWD/out/payload.bin"
           ls -la shim/out/
+          if [ "${{ inputs.device }}" != "sweet" ]; then
+            python3 out/avb/avbtool.py add_hash_footer \
+              --image shim/out/shim-boot.img \
+              --partition_name boot --partition_size 134217728 \
+              --key out/avb/test/data/testkey_rsa2048.pem \
+              --algorithm SHA256_RSA2048
+            tail -c 64 shim/out/shim-boot.img | xxd | tail -2
+            ls -la shim/out/shim-boot.img
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
