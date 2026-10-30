@@ -33,7 +33,19 @@ truncate -s "$size" out/Image
 # (it just drops back to fastboot, no error). Wrapping moves our own ARM64
 # header to 0x14, so its magic lands at 0x4c exactly like theirs.
 if [ "${WRAP_UNCOMPRESSED_IMG:-0}" = "1" ]; then
-	# Layout (verified against both the stock and the TWRP kernel blob):
+	# 0x00 "UNCOMPRESSED_IMG" (16B, no NUL) | 0x10 u32 dtb_off | 0x14 ARM64 Image | DTB
+	# dtb_off is relative to 0x14. Verified against the stock and TWRP blobs.
+	python3 -c "
+import struct
+img = open('out/Image','rb').read()
+dtb = open('../dtb/boot_unpacked/dtb','rb').read()
+img += b'\x00' * ((-len(img)) % 4096)
+blob = b'UNCOMPRESSED_IMG' + struct.pack('<I', len(img)) + img + dtb
+open('out/Image.w','wb').write(blob)
+print('wrapped: image=%d dtb=%d dtb_off=%#x total=%d' % (len(img), len(dtb), len(img), len(blob)))
+"
+	mv out/Image.w out/Image
+fied against both the stock and the TWRP kernel blob):
 	#   0x00  "UNCOMPRESSED_IMG"       16 bytes, no NUL
 	#   0x10  u32 dtb_off              offset of the appended DTB, relative to 0x14
 	#   0x14  ARM64 Image
