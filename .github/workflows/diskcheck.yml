@@ -1,0 +1,17 @@
+name: diskcheck
+on:
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Disk / memory
+        run: |
+          df -h
+          echo ----
+          free -h
+          echo ----
+          nproc
+          echo ----
+          sudo apt-get update -qq
+          apt-cache policy apfs-fuse hfsprogs rsync 2>/dev/null | head -20
