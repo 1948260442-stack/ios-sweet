@@ -19,6 +19,12 @@ _head:
 	.text
 	.globl _start
 _start:
+#ifdef EARLY_HANG_ASM
+	/* Beacon as the literal first instruction: if the phone hangs instead of
+	 * dropping back to fastboot, ABL did jump to us. */
+1:	wfe
+	b	1b
+#endif
 	msr	daifset, #0xf
 	mov	x19, x0			/* DTB pointer from ABL */
 	msr	spsel, #1
