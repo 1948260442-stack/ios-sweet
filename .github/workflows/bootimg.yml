@@ -45,6 +45,12 @@ jobs:
       - name: Build shim + boot image
         run: |
           chmod +x shim/build.sh
+          if [ "${{ inputs.device }}" = "sweet" ]; then
+            export HEADER_VERSION=2
+          else
+            # cepheus: stock boot.img and TWRP are both header v1 with dtb_size 0
+            export HEADER_VERSION=1 DTB_ARG= OS_VERSION=11.0.0 OS_PATCH_LEVEL=2021-11
+          fi
           MKBOOTIMG="python3 $PWD/out/mkbootimg/mkbootimg.py" bash shim/build.sh "$PWD/out/payload.bin"
           ls -la shim/out/
 
