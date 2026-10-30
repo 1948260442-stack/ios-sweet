@@ -57,7 +57,7 @@ jobs:
             export HEADER_VERSION=2
           else
             # cepheus: stock boot.img and TWRP are both header v1 with dtb_size 0
-            export HEADER_VERSION=1 DTB_ARG= OS_VERSION=11.0.0 OS_PATCH_LEVEL=2021-11
+            export HEADER_VERSION=1 DTB_ARG= OS_VERSION=11.0.0 OS_PATCH_LEVEL=2021-11 WRAP_UNCOMPRESSED_IMG=1
           fi
           if [ "${{ inputs.early_hang }}" = "true" ]; then
             export EXTRA_CFLAGS="-DEARLY_HANG -DEARLY_HANG_ASM"
