@@ -60,6 +60,10 @@ static struct utrd utrl[32] __attribute__((aligned(1024)));
 static struct ucd ucd __attribute__((aligned(128)));
 static uint8_t data[2 * BLOCK] __attribute__((aligned(4096)));
 
+/* userdata partition location, filled in by list_partitions() */
+static uint64_t userdata_first, userdata_last;
+static int ufs_taken_over;	/* 1 once we own the UTRL */
+
 static uint64_t ticks(void)
 {
 	uint64_t t;
@@ -142,6 +146,66 @@ static uint32_t read_blocks(uint32_t lba, uint32_t count, void *buf)
 	return scsi(0, cdb, sizeof(cdb), buf, count * BLOCK, &ocs, &st);
 }
 
+/* Issue SCSI WRITE(10). dir: 1 = data-in (read), 0 = data-out (write). */
+static uint32_t scsi_dir(uint8_t lun, const uint8_t *cdb, unsigned cdb_len, void *buf, uint32_t len,
+    int dir, uint32_t *ocs_out, uint32_t *status_out)
+{
+	static uint8_t tag;
+	zero(&utrl[0], sizeof(utrl[0]));
+	zero(&ucd, sizeof(ucd));
+
+	ucd.cmd[0] = 0x01;			/* COMMAND */
+	ucd.cmd[1] = (len && dir) ? 0x40 : 0x00;	/* R bit only for data-in */
+	ucd.cmd[2] = lun;
+	ucd.cmd[3] = ++tag;
+	ucd.cmd[12] = len >> 24;
+	ucd.cmd[13] = len >> 16;
+	ucd.cmd[14] = len >> 8;
+	ucd.cmd[15] = len;
+	for (unsigned i = 0; i < cdb_len; i++)
+		ucd.cmd[16 + i] = cdb[i];
+
+	uintptr_t ucd_pa = (uintptr_t)&ucd;
+	/* bit25 (DD): 1 = device->host (read), 0 = host->device (write) */
+	utrl[0].dw0 = (1u << 28) | ((dir ? 2u : 0u) << 25) | (1u << 24);
+	utrl[0].dw2 = 0x0f;
+	utrl[0].ucdba = (uint32_t)ucd_pa;
+	utrl[0].ucdbau = (uint32_t)(ucd_pa >> 32);
+	utrl[0].resp = (512u / 4) << 16 | (512u / 4);
+	if (len) {
+		uintptr_t buf_pa = (uintptr_t)buf;
+		ucd.prdt[0].addr_lo = (uint32_t)buf_pa;
+		ucd.prdt[0].addr_hi = (uint32_t)(buf_pa >> 32);
+		ucd.prdt[0].dbc = len - 1;
+		utrl[0].prdt = (1024u / 4) << 16 | 1;
+	}
+	__asm__ volatile("dsb sy" ::: "memory");
+
+	ufs_wr(REG_UTRLDBR, 1);
+	uint64_t start = ticks();
+	while (ufs_rd(REG_UTRLDBR) & 1) {
+		if (ticks() - start > 19200000) {
+			ufs_wr(REG_UTRLCLR, ~1u);
+			return 1;
+		}
+	}
+	__asm__ volatile("dsb sy" ::: "memory");
+	*ocs_out = utrl[0].dw2 & 0xff;
+	*status_out = ucd.resp[7];
+	if (*ocs_out)
+		return 2;
+	if (ucd.resp[0] != 0x21)
+		return 3;
+	return *status_out ? 4 : 0;
+}
+
+static uint32_t write_blocks(uint32_t lba, uint32_t count, const void *buf)
+{
+	uint8_t cdb[10] = { 0x2a, 0, lba >> 24, lba >> 16, lba >> 8, lba, 0, count >> 8, count, 0 };
+	uint32_t ocs, st;
+	return scsi_dir(0, cdb, sizeof(cdb), (void *)buf, count * BLOCK, 0, &ocs, &st);
+}
+
 static uint64_t le64(const uint8_t *p)
 {
 	uint64_t v = 0;
@@ -186,10 +250,139 @@ static void list_partitions(uint32_t entry_lba, uint32_t nent)
 		if (((last - first + 1) >> 8) < 64)	/* keep the screen to the big ones */
 			continue;
 		con_hex2(name, "lba=", (uint32_t)first, "MiB=", (uint32_t)((last - first + 1) >> 8));
-		if (!__builtin_strcmp(name, "userdata") || !__builtin_strcmp(name, "cust") ||
+		if (!__builtin_strcmp(name, "userdata")) {
+			userdata_first = first;
+			userdata_last = last;
+		}
+		if (!__builtin_strcmp(name, "cust") ||
 		    !__builtin_strcmp(name, "cache"))
 			con_str(" fs", fs_type((uint32_t)first));
 	}
+}
+
+/* Take over the UFS transfer list from ABL. Returns 0 on success. */
+static int ufs_takeover(void)
+{
+	uint32_t hcs = ufs_rd(REG_HCS), hce = ufs_rd(REG_HCE);
+	if (!(hce & 1) || !(hcs & HCS_DP) || !(hcs & HCS_UTRLRDY))
+		return 1;
+	if (ufs_rd(REG_UTRLDBR))
+		return 2;
+
+	ufs_wr(REG_UTRLRSR, 0);
+	uintptr_t list = (uintptr_t)utrl;
+	ufs_wr(REG_UTRLBA, (uint32_t)list);
+	ufs_wr(REG_UTRLBAU, (uint32_t)(list >> 32));
+	ufs_wr(REG_UTRLRSR, 1);
+	if (ufs_rd(REG_UTRLBA) != (uint32_t)list || ufs_rd(REG_UTRLBAU) != (uint32_t)(list >> 32) ||
+	    !(ufs_rd(REG_UTRLRSR) & 1))
+		return 3;
+	return 0;
+}
+
+/* Parse GPT header to find userdata partition. Safe to call before console. */
+static void beacon_find_userdata(void)
+{
+	uint32_t ocs, st, rc;
+	static const uint8_t tur[6] = { 0x00 };
+	for (int i = 0; i < 2; i++) {
+		rc = scsi_dir(0, tur, sizeof(tur), 0, 0, 1, &ocs, &st);
+		if (!rc)
+			break;
+	}
+	/* Read LBA 1 = GPT header */
+	static const uint8_t rd1[10] = { 0x28, 0, 0, 0, 0, 1, 0, 0, 1, 0 };
+	rc = scsi_dir(0, rd1, sizeof(rd1), data, BLOCK, 1, &ocs, &st);
+	if (rc)
+		return;
+	if (data[0] != 'E' || data[1] != 'F' || data[2] != 'I' || data[3] != ' ')
+		return;
+	uint32_t nent = data[80] | data[81] << 8 | data[82] << 16;
+	uint32_t elba = data[72] | data[73] << 8 | data[74] << 16;
+	if (nent > 128)
+		return;
+
+	/* Read partition entries */
+	static uint8_t ents[128 * 128] __attribute__((aligned(4096)));
+	static uint8_t rdparts[10];
+	uint32_t blocks = (nent * 128 + BLOCK - 1) / BLOCK;
+	rdparts[0] = 0x28; rdparts[1] = 0;
+	rdparts[2] = elba >> 24; rdparts[3] = elba >> 16;
+	rdparts[4] = elba >> 8;  rdparts[5] = elba;
+	rdparts[6] = 0; rdparts[7] = blocks >> 8; rdparts[8] = blocks; rdparts[9] = 0;
+	rc = scsi_dir(0, rdparts, sizeof(rdparts), ents, blocks * BLOCK, 1, &ocs, &st);
+	if (rc)
+		return;
+	for (uint32_t i = 0; i < nent; i++) {
+		const uint8_t *e = ents + i * 128;
+		uint64_t first = le64(e + 32), last = le64(e + 40);
+		if (!first)
+			continue;
+		char name[17];
+		for (int c = 0; c < 16; c++) {
+			uint8_t ch = e[56 + 2 * c];
+			name[c] = (ch >= 32 && ch < 127) ? ch : (ch ? '?' : 0);
+		}
+		name[16] = 0;
+		if (!__builtin_strcmp(name, "userdata")) {
+			userdata_first = first;
+			userdata_last = last;
+			return;
+		}
+	}
+}
+
+/*
+ * Drop a beacon block at userdata[last - 300 - stage].
+ * Each stage writes a different block, so the highest stage found on disk
+ * tells us how far boot got even with no screen.
+ *
+ * Beacon block layout (first 64 bytes):
+ *   0x00  "DSHB" magic
+ *   0x04  version = 1
+ *   0x08  stage code
+ *   0x0c  flags
+ *   0x10  ESR_EL1
+ *   0x18  ELR_EL1
+ *   0x20  MPIDR_EL1
+ *   0x28  cntvct_el0 timestamp
+ *   0x30  extra info
+ */
+void ufs_beacon(uint32_t stage, uint64_t extra)
+{
+	/* Be paranoid: never fault in beacon. */
+	if (!ufs_taken_over) {
+		if (ufs_takeover())
+			return;
+		ufs_taken_over = 1;
+	}
+	if (!userdata_first)
+		beacon_find_userdata();
+	if (!userdata_first)
+		return;
+
+	uint32_t lba = (uint32_t)(userdata_last - 300 - stage);
+	uint8_t *blk = data;
+	for (int i = 0; i < BLOCK; i++)
+		blk[i] = 0;
+	blk[0] = 'D'; blk[1] = 'S'; blk[2] = 'H'; blk[3] = 'B';
+	*(uint32_t *)(blk + 4) = 1;
+	*(uint32_t *)(blk + 8) = stage;
+	*(uint32_t *)(blk + 12) = 0;
+
+	uint64_t esr, elr, mpidr, cnt;
+	__asm__ volatile("mrs %0, esr_el1" : "=r"(esr));
+	__asm__ volatile("mrs %0, elr_el1" : "=r"(elr));
+	__asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
+	__asm__ volatile("isb; mrs %0, cntvct_el0" : "=r"(cnt));
+	*(uint64_t *)(blk + 0x10) = esr;
+	*(uint64_t *)(blk + 0x18) = elr;
+	*(uint64_t *)(blk + 0x20) = mpidr;
+	*(uint64_t *)(blk + 0x28) = cnt;
+	*(uint64_t *)(blk + 0x30) = extra;
+
+	uint32_t ocs, st;
+	write_blocks(lba, 1, blk);
 }
 
 void test_ufs(void)
@@ -211,18 +404,21 @@ void test_ufs(void)
 		return;
 	}
 
-	/* Take over the transfer request list: stop, point at ours, run. */
-	ufs_wr(REG_UTRLRSR, 0);
-	uintptr_t list = (uintptr_t)utrl;
-	ufs_wr(REG_UTRLBA, (uint32_t)list);
-	ufs_wr(REG_UTRLBAU, (uint32_t)(list >> 32));
-	ufs_wr(REG_UTRLRSR, 1);
-	con_hex2("UFS", "ours=", (uint32_t)list, "rsr=", ufs_rd(REG_UTRLRSR));
+	if (!ufs_taken_over) {
+		/* Take over the transfer request list: stop, point at ours, run. */
+		ufs_wr(REG_UTRLRSR, 0);
+		uintptr_t list = (uintptr_t)utrl;
+		ufs_wr(REG_UTRLBA, (uint32_t)list);
+		ufs_wr(REG_UTRLBAU, (uint32_t)(list >> 32));
+		ufs_wr(REG_UTRLRSR, 1);
+		ufs_taken_over = 1;
+	}
+	con_hex2("UFS", "ours=", (uint32_t)(uintptr_t)utrl, "rsr=", ufs_rd(REG_UTRLRSR));
 	/*
 	 * Never ring a doorbell unless the host really uses our list: otherwise
 	 * it would execute whatever ABL left in its own slot 0 (maybe a write).
 	 */
-	if (ufs_rd(REG_UTRLBA) != (uint32_t)list || ufs_rd(REG_UTRLBAU) != (uint32_t)(list >> 32) ||
+	if (ufs_rd(REG_UTRLBA) != (uint32_t)(uintptr_t)utrl || ufs_rd(REG_UTRLBAU) != (uint32_t)((uintptr_t)utrl >> 32) ||
 	    !(ufs_rd(REG_UTRLRSR) & 1)) {
 		con_str("UFS", "list base not taken: stop");
 		return;

@@ -142,6 +142,7 @@ void exc_handler(uint64_t slot, uint64_t *regs)
 		irq_handler();
 		return;
 	}
+	ufs_beacon(9, slot);	/* panic beacon: stage 9 = exception */
 	con_clear(BLUE);
 	switch (slot & 3) {
 	case 0: con_str("PANIC", "SYNC"); break;
@@ -374,25 +375,24 @@ void shim_main(uint64_t dtb)
 {
 	struct mmu_info mi;
 
-#ifdef EARLY_HANG
-	/* Bring-up beacon: if ABL actually jumped to us, the device disappears
-	 * from fastboot until it is power-cycled. No console init, no MMU. */
-	for (;;)
-		__asm__ volatile("wfi");
-#endif
+	/* Stage 1: ABL really jumped to us. Write before console/MMU/UFS. */
+	ufs_beacon(1, dtb);
 
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
 	stage = "loader";
 	con_clear(RED);
+	ufs_beacon(2, 0);	/* stage 2: framebuffer mapped */
 	con_str("SHIM", "sweet milestone 4: xnu loader");
 	con_skip();
 	const char *why = loader_boot(dtb);
 	con_str("LOADER", why);
+	ufs_beacon(3, (uint64_t)why);
 	con_skip();
 
 	/* No payload: probe the internal UFS while the MMU is still off. */
 	stage = "ufs";
 	test_ufs();
+	ufs_beacon(4, 0);	/* stage 4: UFS probe done */
 	con_skip();
 	/* Keep the probe results on screen (later tests clear it); reset after 3 min. */
 	con_str("UFS", "probe done, reset in ~3 min");
