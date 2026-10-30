@@ -1,0 +1,100 @@
+name: iosroot
+
+# Builds the 16 GB HFS+ iOS root image that the kernel mounts as rd=ufsroot0.
+# Mirrors README "2. Build the iOS root image", but runs everything on Linux
+# (apfs-fuse is not packaged for Ubuntu 24.04, so it is built from source).
+#
+# Output: ios16-root.simg.gz — a sparse image, gzipped, to flash with
+#   fastboot flash -S 512M userdata ios16-root.simg
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipsw_url:
+        description: iPhone X IPSW url
+        default: "https://updates.cdn-apple.com/2025FallFCS/fullrestores/122-77006/1158E502-D76D-4226-AA06-ED5E30CD1111/iPhone10,3,iPhone10,6_16.7.16_20H392_Restore.ipsw"
+      image_size:
+        description: size of the HFS+ image
+        default: "16G"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq hfsprogs rsync cmake build-essential \
+            libfuse3-dev libbz2-dev zlib1g-dev libssl-dev android-sdk-libsparse-utils
+          which mkfs.hfsplus fsck.hfsplus rsync img2simg
+          sudo modprobe hfsplus || echo "hfsplus module not loadable"
+          grep -c hfsplus /proc/filesystems || true
+          df -h /
+
+      # apfs-fuse reads the APFS DMGs (LZBITMAP) — not in Ubuntu's archive.
+      - name: Build apfs-fuse
+        run: |
+          git clone --recursive --depth 1 https://github.com/sgan81/apfs-fuse.git out/apfs-fuse
+          cd out/apfs-fuse
+          git submodule update --init --recursive --depth 1
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make -j"$(nproc)"
+          sudo make install
+          sudo ldconfig
+          apfs-fuse --help | head -3 || true
+
+      - name: Download IPSW
+        run: |
+          mkdir -p out/ipsw
+          curl -fL --retry 5 --retry-all-errors --ipv4 \
+            -o out/ipsw/restore.ipsw "${{ inputs.ipsw_url }}"
+          ls -la out/ipsw
+
+      - name: Extract DMGs
+        run: |
+          cd out/ipsw
+          # 087-86698 = OS, 087-86593 = SystemOS, 087-86715 = AppOS
+          # (mapped from BuildManifest.plist: Manifest/OS, Cryptex1,SystemOS, Cryptex1,AppOS)
+          unzip -o -q restore.ipsw '087-86698-044.dmg' '087-86593-047.dmg' '087-86715-047.dmg' BuildManifest.plist
+          ls -la
+          rm -f restore.ipsw
+          df -h /
+
+      - name: Build the HFS+ root
+        run: |
+          cd out/ipsw
+          # mkiosroot.sh invokes sudo itself for the FUSE and loop mounts.
+          bash "$GITHUB_WORKSPACE/tools/mkiosroot.sh" \
+            087-86698-044.dmg 087-86593-047.dmg 087-86715-047.dmg \
+            "$GITHUB_WORKSPACE/out/ios16-root.img" "${{ inputs.image_size }}"
+          df -h /
+
+      - name: Apply the bring-up tweaks
+        run: |
+          IMG="$GITHUB_WORKSPACE/out/ios16-root.img"
+          sudo fsck.hfsplus -fy "$IMG"
+          sudo mkdir -p /mnt/iosroot
+          sudo mount -t hfsplus -o loop,force "$IMG" /mnt/iosroot
+          sudo python3 tools/sweet-root-tweaks.py /mnt/iosroot
+          sudo umount /mnt/iosroot
+
+      - name: Pack sparse image
+        run: |
+          cd out
+          ls -la ios16-root.img
+          img2simg ios16-root.img ios16-root.simg
+          ls -la ios16-root.simg
+          gzip -6 ios16-root.simg
+          ls -la ios16-root.simg.gz
+          df -h /
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios16-root
+          path: out/ios16-root.simg.gz
+          retention-days: 7
+          compression-level: 0
