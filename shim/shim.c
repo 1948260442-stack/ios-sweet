@@ -410,8 +410,17 @@ void shim_main(uint64_t dtb)
 		 "smccc=", smc(SMCCC_VERSION, 0, 0, 0));
 	con_skip();
 
-	stage = "hold";
-	con_str("HOLD", "results stay on screen");
+	/* Hold the probe results briefly (the loader/XNU will repaint), then
+	 * act as iBoot: load the SWEETXNU payload from the ABL ramdisk. */
+	stage = "loader";
+	con_str("LOAD", "starting xnu loader in 2s");
+	delay_ms(2000);
+	const char *err = loader_boot(dtb);
+
+	/* loader_boot only returns on failure (success jumps into XNU). */
+	stage = "error";
+	con_skip();
+	con_str("ERR", err ? err : "loader failed");
 	for (;;)
 		__asm__ volatile("wfe");
 }
