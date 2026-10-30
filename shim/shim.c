@@ -373,33 +373,11 @@ static uint32_t to_us(uint64_t ticks)
 
 void shim_main(uint64_t dtb)
 {
-	struct mmu_info mi;
-
-	/* Stage 1: ABL really jumped to us. Write before console/MMU/UFS. */
-	ufs_beacon(1, dtb);
-
-	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
-	stage = "loader";
-	con_clear(RED);
-	ufs_beacon(2, 0);	/* stage 2: framebuffer mapped */
-	con_str("SHIM", "sweet milestone 4: xnu loader");
-	con_skip();
-	const char *why = loader_boot(dtb);
-	con_str("LOADER", why);
-	ufs_beacon(3, (uint64_t)why);
-	con_skip();
-
-	/* No payload: probe the internal UFS while the MMU is still off. */
-	stage = "ufs";
-	test_ufs();
-	ufs_beacon(4, 0);	/* stage 4: UFS probe done */
-	con_skip();
-	/* Keep the probe results on screen (later tests clear it); reset after 3 min. */
-	con_str("UFS", "probe done, reset in ~3 min");
-	delay_ms(180000);
-	reset(20);
-
-	stage = "fill off";
+	/* MINIMAL: just paint the screen red and spin. No UFS, no loader, no MMU. */
+	con_clear(0xff0000U);	/* pure red */
+	for (;;)
+		__asm__ volatile("wfe");
+}
 	uint64_t fill_off = ticks_fill(RED);
 	uint64_t mem_off = ticks_mem();
 
