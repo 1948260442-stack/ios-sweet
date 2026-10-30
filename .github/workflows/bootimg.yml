@@ -69,7 +69,7 @@ jobs:
               --image shim/out/shim-boot.img \
               --partition_name boot --partition_size 134217728 \
               --key out/avb/test/data/testkey_rsa2048.pem \
-              --algorithm SHA256_RSA2048
+              --algorithm SHA256_RSA2048 --flags 2
             tail -c 64 shim/out/shim-boot.img | xxd | tail -2
             ls -la shim/out/shim-boot.img
           fi
