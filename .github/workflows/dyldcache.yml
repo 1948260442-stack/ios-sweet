@@ -1,0 +1,59 @@
+name: dyldcache
+
+# Pulls the iOS dyld shared cache out of the built root image so a stuck
+# userspace address (e.g. pc 0x1d91b5030 from the SMP sampler) can be
+# symbolicated with `ipsw dyld a2s`.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: iosroot workflow run that produced the ios16-root artifact
+        default: "41028332087"
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq hfsprogs android-sdk-libsparse-utils
+          df -h /
+
+      - name: Download the root artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ inputs.run_id }}" -n ios16-root -D out/root
+          ls -la out/root
+          df -h /
+
+      - name: Unpack
+        run: |
+          cd out/root
+          gunzip -f ios16-root.simg.gz
+          simg2img ios16-root.simg ios16-root.img
+          ls -la
+          df -h /
+
+      - name: Mount and copy the shared cache
+        run: |
+          IMG="$GITHUB_WORKSPACE/out/root/ios16-root.img"
+          sudo mkdir -p /mnt/iosroot
+          sudo mount -t hfsplus -o loop,ro "$IMG" /mnt/iosroot
+          D=/mnt/iosroot/private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld
+          ls -la "$D" | head -20 || true
+          sudo tar -C "$D" -czf "$GITHUB_WORKSPACE/out/dyldcache.tar.gz" .
+          sudo umount /mnt/iosroot
+          ls -la "$GITHUB_WORKSPACE/out/dyldcache.tar.gz"
+          df -h /
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dyldcache
+          path: out/dyldcache.tar.gz
+          retention-days: 7
+          compression-level: 0
