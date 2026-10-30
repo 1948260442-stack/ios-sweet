@@ -43,6 +43,22 @@ jobs:
           git clone --depth 1 https://android.googlesource.com/platform/external/avb out/avb
           ls out/avb/test/data/testkey_rsa2048.pem
 
+      # MobileGestalt derives the device identity from /product of the real
+      # iPhone X device tree. Fetch just that one 33 KB IPSW member (HTTP range)
+      # and unwrap it: DER -> IM4P -> LZFSE -> ADT.
+      - name: Fetch the iPhone X device tree
+        if: inputs.device != 'sweet'
+        run: |
+          python3 -m pip install --quiet lzfse
+          mkdir -p research/ipsw-x/dt
+          python3 tools/remotezip.py \
+            "https://updates.cdn-apple.com/2025FallFCS/fullrestores/122-77006/1158E502-D76D-4226-AA06-ED5E30CD1111/iPhone10,3,iPhone10,6_16.7.16_20H392_Restore.ipsw" \
+            DeviceTree.d22ap.im4p research/ipsw-x/dt
+          python3 tools/im4p_extract.py \
+            research/ipsw-x/dt/Firmware/all_flash/DeviceTree.d22ap.im4p \
+            research/ipsw-x/d22ap.adt
+          ls -la research/ipsw-x/
+
       - name: Build ADT + payload
         run: |
           python3 tools/mkadt.py out/shuttle.adt --device "${{ inputs.device }}" --highmem
