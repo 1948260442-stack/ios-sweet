@@ -22,7 +22,9 @@ $OBJCOPY -O binary out/shim.elf out/Image
 # ABL copies the file; pad to image_size so .bss/stacks exist as zeroed bytes.
 # (bash arithmetic understands 0x.., so this works with mawk as well as gawk)
 size=$($NM out/shim.elf | awk '$3=="_end"{print $1}')
-size=$((size))
+# nm prints 16 hex digits with leading zeros; without the 0x prefix bash would
+# read them as octal. Force hex.
+size=$((0x$size))
 truncate -s "$size" out/Image
 # Ramdisk: an xnu payload (tools/mkpayload.py) if given as $1, else an empty
 # newc cpio (ABL dislikes a zero-size ramdisk on some builds) -> diagnostics.
