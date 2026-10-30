@@ -45,7 +45,7 @@ jobs:
       - name: Build shim + boot image
         run: |
           chmod +x shim/build.sh
-          MKBOOTIMG="python3 $PWD/out/mkbootimg/mkbootimg.py" bash shim/build.sh out/payload.bin
+          MKBOOTIMG="python3 $PWD/out/mkbootimg/mkbootimg.py" bash shim/build.sh "$PWD/out/payload.bin"
           ls -la shim/out/
 
       - uses: actions/upload-artifact@v4
