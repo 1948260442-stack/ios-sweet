@@ -1,0 +1,58 @@
+name: bootimg
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_run_id:
+        description: xnu workflow run id that produced the xnu-kernel artifact
+        required: true
+      device:
+        description: mkadt device profile (sweet / cepheus)
+        default: cepheus
+      cmdline:
+        description: kernel boot-args passed to mkpayload
+        default: "debug=0xc serial=3 cpus=6 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_noconsole=1 sweetfb_hz=30"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch xnu-kernel artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.kernel_run_id }}" -n xnu-kernel -D out/kernel
+          ls -la out/kernel
+          file out/kernel/kernel.development.* || true
+
+      - name: Cross toolchain + mkbootimg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu cpio
+          git clone --depth 1 https://android.googlesource.com/platform/system/tools/mkbootimg out/mkbootimg
+          python3 out/mkbootimg/mkbootimg.py --help | head -5
+
+      - name: Build ADT + payload
+        run: |
+          python3 tools/mkadt.py out/shuttle.adt --device "${{ inputs.device }}" --highmem
+          python3 tools/mkpayload.py out/kernel/kernel.development.sweet out/shuttle.adt out/payload.bin \
+            --cmdline '${{ inputs.cmdline }}'
+          ls -la out
+
+      - name: Build shim + boot image
+        run: |
+          chmod +x shim/build.sh
+          MKBOOTIMG="python3 $PWD/out/mkbootimg/mkbootimg.py" bash shim/build.sh out/payload.bin
+          ls -la shim/out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shim-boot-${{ inputs.device }}
+          path: |
+            shim/out/shim-boot.img
+            out/shuttle.adt
+            out/payload.bin
+          if-no-files-found: error

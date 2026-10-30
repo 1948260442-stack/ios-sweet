@@ -41,6 +41,40 @@ QEMU_VTIMER_INTID = 27
 
 BOOT_MANIFEST_HASH = hashlib.sha384(b'sweet boot manifest').digest()
 
+# ---- per-device hardware profiles -----------------------------------------
+# Every value here was read from the device's own live FDT, not guessed.
+# cepheus = Xiaomi Mi 9 (SM8150, board CEPHEUS, PM8150):
+#   /memory            <0x80000000 0x3bb00000> <0xc0000000 0xc0000000> <0x180000000 0x100000000>
+#   gic                reg <0x17a00000 0x10000 0x17a60000 0x100000>
+#   ufshc@1d84000      reg <0x1d84000 0x2500>
+#   cont_splash_region reg <0x9c000000 0x2400000>
+#   panel              dsi_samsung_fhd_ea8076_f1p2_cmd, 1080x2340
+#   timer              clock-frequency 19200000, virtual PPI 3 (= INTID 19)
+# The low bank is fragmented by Qualcomm carve-outs, so the kernel lives in the
+# upper 4 GiB bank - same approach as sweet's --highmem.
+DEVICE_PROFILES = {
+    'sweet': {},
+    'cepheus': {
+        'HIGH_PHYS_BASE': 0x180000000,
+        'HIGH_MEM_SIZE': 0x100000000,
+        'FB_SIZE': 0x2400000,
+        'FB_W': 1080,
+        'FB_H': 2340,
+        'FB_STRIDE': 1080 * 4,
+        'UFS_SIZE': 0x3000,
+    },
+}
+
+
+def apply_device(name):
+    """Override the module-level hardware constants for a device profile."""
+    if name not in DEVICE_PROFILES:
+        raise SystemExit(f'unknown --device {name!r}; known: {", ".join(DEVICE_PROFILES)}')
+    g = globals()
+    for k, v in DEVICE_PROFILES[name].items():
+        g[k] = v
+    print(f'mkadt: device profile {name}', file=sys.stderr)
+
 # The iOS userland is the iPhone X (iPhone10,3 / D22AP) IPSW. MobileGestalt
 # derives product type, device class, home-button-less UI, artwork etc. from
 # the root identity and /product of the real D22AP device tree. That tree is
@@ -242,6 +276,13 @@ def build(seed=None, qemu=False, highmem=False):
 
 
 if __name__ == '__main__':
+    dev = 'sweet'
+    for i, a in enumerate(sys.argv):
+        if a == '--device' and i + 1 < len(sys.argv):
+            dev = sys.argv[i + 1]
+        elif a.startswith('--device='):
+            dev = a.split('=', 1)[1]
+    apply_device(dev)
     root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv)
     blob = adt.serialize(root)
     open(sys.argv[1], 'wb').write(blob)
